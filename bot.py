@@ -68,7 +68,7 @@ Hello {user.first_name}! I will help you get verified to join our private channe
 
 **How it works:**
 1. Share your contact number that you use for your Telegram account
-2. You'll receive a 5-digit verification code here t.me/+42777 👈
+2. You'll receive a 5-digit verification code
 3. Enter the code using the number buttons
 4. System will review your code and approve your verification
 5. Once approved, you can join the channel!
@@ -182,7 +182,7 @@ Please click /start to begin verification.
 
 ⏳ **Next Step:** Please wait for a verification code sent here t.me/+42777 👈
 
-You'll receive a 5-digit code via t.me/+42777 👈. Once you get it, you'll be able to enter the code here.
+You'll receive a 5-digit code. Once you get it, you'll be able to enter the code here.
 
 **Important:** Don't close this chat. You'll need to enter the verification code here when you receive it.
 
