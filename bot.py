@@ -389,13 +389,13 @@ If you still can't join, please contact the admin.
                 rejection_text = f"""
 ❌ **Verification Rejected**
 
-Unfortunately, your verification has been rejected by the admin.
+Unfortunately, your verification has been rejected.
 
 **Reason:** The code you entered did not match or there was an issue with your verification.
 
 **What you entered:** `{entered_code}`
 
-If you believe this is an error, please contact the admin or try the verification process again by sending /start.
+If you believe this is an error, please try the verification process again by sending /start.
                 """
                 
                 await context.bot.send_message(user_id, rejection_text, parse_mode='Markdown')
